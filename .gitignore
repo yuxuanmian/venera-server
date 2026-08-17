@@ -1,0 +1,41 @@
+# Build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+/bin/
+/build/
+
+# IDE / OS
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Runtime data (local DB, cookie key, debug logs)
+data/
+*.db
+*.db-shm
+*.db-wal
+*.log
+debug.jsonl
+cookie.key
+
+# Frontend dependencies (dist is committed so admin UI works without a build step)
+web/node_modules/
+web/dist/
+
+# Local-only dev helper
+dev.cmd
+
+# Recorded real-source fixtures (regenerable; may contain source data)
+pocdata/*.jsonl
+
+# Go local env
+go.env
+*.tgz
+

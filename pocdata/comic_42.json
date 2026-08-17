@@ -1,0 +1,9 @@
+{
+  "title": "Test Comic",
+  "cover": "https://example.com/cover.jpg",
+  "updateTime": "2026-07-20",
+  "chapters": {
+    "1": "第1话",
+    "2": "第2话"
+  }
+}
