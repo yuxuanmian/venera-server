@@ -37,5 +37,6 @@ pocdata/*.jsonl
 
 # Go local env
 go.env
+.env
 *.tgz
 
