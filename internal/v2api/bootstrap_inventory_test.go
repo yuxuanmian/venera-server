@@ -42,11 +42,11 @@ func TestBootstrapInventoryAndSourceStateRoutes(t *testing.T) {
 		"expectedInventoryRevision": 0,
 		"entries": []any{map[string]any{
 			"artifactId": "artifact-api", "managementMode": "managed", "packageReleaseId": "release-api", "coreHash": "core-api",
-			"clientExtensionHashes": map[string]string{}, "observationContractId": "obs", "accountObservationContractId": "aobs", "accountProbeContractId": "probe",
+			"clientExtensionHashes": map[string]string{}, "observationContractId": "obs", "accountObservationContractId": "aobs", "accountProbeContractId": "probe", "markerSchemes": []string{},
 		}},
 	}
 	updated := apiCall(t, fixture.router, http.MethodPut, "/v2/client/source-inventory", inventory, token, "inventory-bootstrap", "2")
-	if updated.Code != http.StatusOK || !strings.Contains(updated.Body.String(), `"compatibilityState":"unknown"`) {
+	if updated.Code != http.StatusOK || !strings.Contains(updated.Body.String(), `"compatibilityState":"unknown"`) || !strings.Contains(updated.Body.String(), `"inventoryRevision":1`) {
 		t.Fatalf("inventory response = %d %s", updated.Code, updated.Body.String())
 	}
 	replay := apiCall(t, fixture.router, http.MethodPut, "/v2/client/source-inventory", inventory, token, "inventory-bootstrap", "2")

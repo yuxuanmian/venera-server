@@ -26,6 +26,7 @@ type inventoryEntryBody struct {
 	ObservationContractID        string            `json:"observationContractId"`
 	AccountObservationContractID string            `json:"accountObservationContractId"`
 	AccountProbeContractID       string            `json:"accountProbeContractId"`
+	MarkerSchemes                []string          `json:"markerSchemes"`
 }
 
 type inventoryEntryResponse struct {
@@ -33,7 +34,7 @@ type inventoryEntryResponse struct {
 	ManagementMode               string `json:"managementMode"`
 	PackageReleaseID             string `json:"packageReleaseId,omitempty"`
 	CompatibilityState           string `json:"compatibilityState"`
-	CompatibilityReason          string `json:"compatibilityReason,omitempty"`
+	CompatibilityReason          string `json:"reason,omitempty"`
 	CoreHash                     string `json:"coreHash,omitempty"`
 	ClientExtensionsJSON         string `json:"clientExtensionsJson,omitempty"`
 	ObservationContractID        string `json:"observationContractId,omitempty"`
@@ -42,9 +43,9 @@ type inventoryEntryResponse struct {
 }
 
 type replaceInventoryResponse struct {
-	ClientID string                   `json:"clientId"`
-	Revision int64                    `json:"revision"`
-	Entries  []inventoryEntryResponse `json:"entries"`
+	ClientID          string                   `json:"clientId"`
+	InventoryRevision int64                    `json:"inventoryRevision"`
+	Entries           []inventoryEntryResponse `json:"entries"`
 }
 
 type sourceStateResponse struct {
@@ -73,7 +74,8 @@ func (router *Router) replaceInventoryHandler(w http.ResponseWriter, request *ht
 		return
 	}
 	var body replaceInventoryBody
-	if err := decodeJSON(w, request, &body); err != nil || body.ExpectedInventoryRevision == nil || *body.ExpectedInventoryRevision < 0 {
+	decodeErr := decodeJSON(w, request, &body)
+	if decodeErr != nil || body.ExpectedInventoryRevision == nil || *body.ExpectedInventoryRevision < 0 {
 		writeAPIError(router, w, request, http.StatusBadRequest, "invalid_request", "request is invalid", false, nil)
 		return
 	}
@@ -114,7 +116,7 @@ func (router *Router) replaceInventoryHandler(w http.ResponseWriter, request *ht
 		writeStoreError(router, w, request, err)
 		return
 	}
-	response := replaceInventoryResponse{ClientID: result.ClientID, Revision: int64(result.Revision), Entries: make([]inventoryEntryResponse, 0, len(result.Entries))}
+	response := replaceInventoryResponse{ClientID: result.ClientID, InventoryRevision: int64(result.Revision), Entries: make([]inventoryEntryResponse, 0, len(result.Entries))}
 	for i, entry := range result.Entries {
 		response.Entries = append(response.Entries, inventoryEntryResponse{
 			ArtifactID: string(entry.ArtifactID), ManagementMode: entry.ManagementMode, PackageReleaseID: string(entry.PackageReleaseID),
@@ -194,6 +196,9 @@ func inventoryCompatibility(manifest v2manifest.Manifest, input inventoryEntryBo
 		if input.ObservationContractID != pkg.Tracking.ObservationContractID || input.AccountObservationContractID != pkg.Tracking.AccountObservationContractID || input.AccountProbeContractID != pkg.AccountProbeContract.ID {
 			return v2domain.CompatibilityIncompatible, "contract differs"
 		}
+		if !sameStringSet(input.MarkerSchemes, pkg.Tracking.MarkerSchemes) {
+			return v2domain.CompatibilityIncompatible, "marker scheme differs"
+		}
 		for extensionID := range input.ClientExtensionHashes {
 			known := false
 			for _, extension := range pkg.Extensions {
@@ -212,4 +217,21 @@ func inventoryCompatibility(manifest v2manifest.Manifest, input inventoryEntryBo
 		return v2domain.CompatibilityCompatible, ""
 	}
 	return v2domain.CompatibilityUnknown, "artifact is not in the active manifest"
+}
+
+func sameStringSet(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	counts := make(map[string]int, len(left))
+	for _, value := range left {
+		counts[value]++
+	}
+	for _, value := range right {
+		if counts[value] == 0 {
+			return false
+		}
+		counts[value]--
+	}
+	return true
 }

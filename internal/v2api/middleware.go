@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -50,6 +51,9 @@ func (router *Router) commonMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("X-Venera-Protocol", "2")
 		w.Header().Set("X-Venera-Min-App-Version", router.cfg.MinAppVersion)
 		request = request.WithContext(contextWithRequestID(request.Context(), requestID))
+		if strings.HasPrefix(request.URL.Path, "/v2/") {
+			logRequestPath(request)
+		}
 		if request.Body != nil && request.Method != http.MethodGet && router.cfg.HTTPBodyLimit > 0 {
 			request.Body = http.MaxBytesReader(w, request.Body, router.cfg.HTTPBodyLimit)
 		}
@@ -127,7 +131,10 @@ func writeAPIError(router *Router, w http.ResponseWriter, request *http.Request,
 	})
 }
 
-func decodeJSON(w http.ResponseWriter, request *http.Request, target any) error {
+func decodeJSON(w http.ResponseWriter, request *http.Request, target any) (resultErr error) {
+	defer func() {
+		logRequestInput(request, target, resultErr)
+	}()
 	decoder := json.NewDecoder(request.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
@@ -141,4 +148,89 @@ func decodeJSON(w http.ResponseWriter, request *http.Request, target any) error 
 		return err
 	}
 	return nil
+}
+
+func logRequestPath(request *http.Request) {
+	query := request.URL.Query()
+	for key := range query {
+		if isSensitiveLogField(key) {
+			query[key] = []string{"<redacted>"}
+		}
+	}
+	log.Printf(
+		"v2 request request_id=%s method=%s path=%s query=%q",
+		requestIDFromContext(request), request.Method, request.URL.Path, query.Encode(),
+	)
+}
+
+func logRequestInput(request *http.Request, input any, decodeErr error) {
+	encoded, err := redactedRequestJSON(input)
+	if err != nil {
+		encoded = []byte(`"<unavailable>"`)
+	}
+	if decodeErr != nil {
+		log.Printf(
+			"v2 request request_id=%s method=%s path=%s input=%s decode_error=%q",
+			requestIDFromContext(request), request.Method, request.URL.Path, encoded, decodeErr.Error(),
+		)
+		return
+	}
+	log.Printf(
+		"v2 request request_id=%s method=%s path=%s input=%s",
+		requestIDFromContext(request), request.Method, request.URL.Path, encoded,
+	)
+}
+
+func redactedRequestJSON(input any) ([]byte, error) {
+	encoded, err := json.Marshal(input)
+	if err != nil {
+		return nil, err
+	}
+	var value any
+	decoder := json.NewDecoder(strings.NewReader(string(encoded)))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	return json.Marshal(redactRequestValue(value))
+}
+
+func redactRequestValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, child := range typed {
+			if isSensitiveLogField(key) {
+				typed[key] = "<redacted>"
+				continue
+			}
+			typed[key] = redactRequestValue(child)
+		}
+	case []any:
+		for index, child := range typed {
+			typed[index] = redactRequestValue(child)
+		}
+	}
+	return value
+}
+
+func isSensitiveLogField(key string) bool {
+	normalized := strings.ToLower(key)
+	for _, fragment := range []string{
+		"authorization",
+		"cookie",
+		"credential",
+		"cursor",
+		"enrollment",
+		"identity",
+		"password",
+		"receipt",
+		"secret",
+		"session",
+		"token",
+	} {
+		if strings.Contains(normalized, fragment) {
+			return true
+		}
+	}
+	return false
 }

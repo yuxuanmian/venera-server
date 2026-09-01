@@ -299,7 +299,7 @@ func enrollCompatibleClient(t *testing.T, fixture *apiFixture, pending string, p
 		"artifactId": pkg.ArtifactID, "managementMode": "managed", "packageReleaseId": pkg.PackageReleaseID,
 		"coreHash": pkg.Core.SHA256, "clientExtensionHashes": map[string]string{},
 		"observationContractId": pkg.Tracking.ObservationContractID, "accountObservationContractId": pkg.Tracking.AccountObservationContractID,
-		"accountProbeContractId": pkg.AccountProbeContract.ID,
+		"accountProbeContractId": pkg.AccountProbeContract.ID, "markerSchemes": pkg.Tracking.MarkerSchemes,
 	}
 	inventory := apiCall(t, fixture.router, http.MethodPut, "/v2/client/source-inventory", map[string]any{"expectedInventoryRevision": 0, "entries": []any{entry}}, token, "inventory-"+pending, "2")
 	if inventory.Code != http.StatusOK || !strings.Contains(inventory.Body.String(), `"compatibilityState":"compatible"`) {
