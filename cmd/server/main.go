@@ -19,7 +19,13 @@ import (
 )
 
 func main() {
-	cfg := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("load config: %v", err)
+	}
+	if cfg.DebugOpenAuth {
+		log.Printf("WARNING: debug open auth enabled; /api and /admin authentication is disabled")
+	}
 
 	st, err := store.Open(cfg.DataDir)
 	if err != nil {
@@ -51,6 +57,9 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	if err := srv.StartTracking(ctx); err != nil {
+		log.Printf("start tracking scanner: %v", err)
+	}
 	sched := scheduler.New(st, eng, 30*time.Second)
 	sched.Configure(cfg.WorkerCount, cfg.RequestInterval, cfg.ChunkCooldown)
 	go sched.Run(ctx)
@@ -72,6 +81,7 @@ func main() {
 	<-stop
 	log.Printf("shutting down...")
 	cancel()
+	_ = srv.Close()
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 	_ = httpServer.Shutdown(shutdownCtx)

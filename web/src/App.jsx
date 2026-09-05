@@ -3,6 +3,7 @@ import React, { useEffect, useState, useCallback } from 'react'
 const tabs = [
   { key: 'jobs', label: '队列 Jobs' },
   { key: 'mirror', label: '镜像 Mirror' },
+  { key: 'tracking', label: '追更诊断 Tracking' },
   { key: 'logs', label: '日志 Logs' },
 ]
 
@@ -17,6 +18,7 @@ export default function App() {
   const [stats, setStats] = useState(null)
   const [jobs, setJobs] = useState([])
   const [mirror, setMirror] = useState([])
+  const [tracking, setTracking] = useState(null)
   const [logs, setLogs] = useState('')
   const [error, setError] = useState('')
   const [refreshing, setRefreshing] = useState(false)
@@ -31,6 +33,11 @@ export default function App() {
       setMirror(m.mirror || [])
       const l = await api('/logs')
       setLogs(l.logs || '')
+      try {
+        setTracking(await api('/tracking/diagnostics'))
+      } catch (_) {
+        setTracking(null)
+      }
       setError('')
     } catch (e) {
       setError(String(e.message || e))
@@ -88,6 +95,7 @@ export default function App() {
       <main>
         {tab === 'jobs' && <JobsTable jobs={jobs} />}
         {tab === 'mirror' && <MirrorTable mirror={mirror} />}
+        {tab === 'tracking' && <TrackingDiagnostics tracking={tracking} />}
         {tab === 'logs' && <pre className="logs">{logs || '(no logs)'}</pre>}
       </main>
     </div>
@@ -151,5 +159,59 @@ function MirrorTable({ mirror }) {
         ))}
       </tbody>
     </table>
+  )
+}
+
+function TrackingDiagnostics({ tracking }) {
+  if (!tracking) return <p className="empty">暂无追更诊断或追更目录未配置</p>
+  const data = tracking.data || {}
+  const runtime = tracking.runtime || {}
+  const exclusions = runtime.exclusions || {}
+  const artifacts = data.artifacts || []
+  return (
+    <div className="tracking-diagnostics">
+      <section className="stats">
+        <Stat label="Active Revision" value={data.activeRevision || '–'} />
+        <Stat label="Generation" value={data.generation ?? '–'} />
+        <Stat label="Cloud Clients" value={data.enabledClientCount ?? '–'} />
+        <Stat label="Effective Interests" value={data.effectiveInterestCount ?? '–'} />
+        <Stat label="Fresh Observations" value={data.freshObservationCount ?? '–'} />
+        <Stat label="Stale Observations" value={data.staleObservationCount ?? '–'} />
+        <Stat label="Generation Rejections" value={runtime.generationRejections ?? '–'} />
+      </section>
+      <section className="stats">
+        <Stat label="Demands" value={runtime.demandCount ?? '–'} />
+        <Stat label="Jobs" value={runtime.jobCount ?? '–'} />
+        <Stat label="Pending Jobs" value={runtime.pendingJobCount ?? '–'} />
+        <Stat label="Checkpoints" value={runtime.checkpointCount ?? '–'} />
+        <Stat label="Scanner Errors" value={runtime.scannerErrorCount ?? '–'} />
+        <Stat label="Excluded (stale)" value={exclusions.stale ?? 0} />
+        <Stat label="Excluded (old generation)" value={exclusions.oldGeneration ?? 0} />
+      </section>
+      <h2>Active Artifacts</h2>
+      {!artifacts.length ? <p className="empty">暂无 Cloud-capable 制品</p> : (
+        <table>
+          <thead>
+            <tr>
+              <th>Source</th><th>File</th><th>Observations</th><th>Fresh</th>
+              <th>Stale</th><th>Old Revision</th><th>Old Generation</th>
+            </tr>
+          </thead>
+          <tbody>
+            {artifacts.map((item) => (
+              <tr key={`${item.artifact?.sourceKey}/${item.artifact?.fileName}`}>
+                <td>{item.artifact?.sourceKey || '–'}</td>
+                <td>{item.artifact?.fileName || '–'}</td>
+                <td>{item.observationCount ?? 0}</td>
+                <td>{item.freshObservationCount ?? 0}</td>
+                <td>{item.staleObservationCount ?? 0}</td>
+                <td>{item.oldRevisionCount ?? 0}</td>
+                <td>{item.oldGenerationCount ?? 0}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
   )
 }

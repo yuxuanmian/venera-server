@@ -1,0 +1,18 @@
+{
+  "debug_open_auth": true,
+  "debug_user_id": "__venera_debug_user__",
+  "debug_device_id": "__venera_debug_device__",
+  "debug_user_tz": "UTC",
+  "debug_locale": "en-US",
+  "tracking_catalog_id": "yuxuanmian/venera-configs",
+  "tracking_catalog_repository": "../venera-configs",
+  "tracking_revision": "df52e6b55e2c4f093047eb8469a33bbec3cd799c",
+  "tracking_cache_dir": "data/tracking-cache",
+  "tracking_interval": "12h",
+  "tracking_snapshot_max_requests": 64,
+  "tracking_snapshot_max_items": 0,
+  "tracking_snapshot_deadline": "2m",
+  "tracking_max_attempts": 3,
+  "tracking_observation_limit": 10000,
+  "tracking_index_max_bytes": 4194304
+}

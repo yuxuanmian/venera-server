@@ -110,6 +110,15 @@ func (s *Server) registerHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	token := bearerToken(r)
+	if s.cfg.DebugOpenAuth {
+		// Keep registration on the single deterministic debug principal. Any
+		// client-supplied bearer value is intentionally ignored in this mode.
+		if err := s.ensureDebugPrincipal(); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal", "initialize debug principal failed")
+			return
+		}
+		token = debugOpenAuthToken
+	}
 	if token == "" {
 		writeError(w, http.StatusUnauthorized, "auth_error", "missing bearer token")
 		return

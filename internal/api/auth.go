@@ -8,6 +8,8 @@ import (
 	"net"
 	"net/http"
 	"strings"
+
+	"venera-server/internal/config"
 )
 
 type ctxKey int
@@ -17,13 +19,60 @@ const (
 	ctxDeviceID
 )
 
+// This token is only used to keep the legacy registration path compatible
+// with debug-open mode. It is never accepted as a real credential while
+// debug-open mode is disabled.
+const debugOpenAuthToken = "__venera_debug_open_auth__"
+
 func hashToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
 }
 
+func (s *Server) debugPrincipal() (userID, deviceID string) {
+	userID = s.cfg.DebugUserID
+	if userID == "" {
+		userID = config.DefaultDebugUserID
+	}
+	deviceID = s.cfg.DebugDeviceID
+	if deviceID == "" {
+		deviceID = config.DefaultDebugDeviceID
+	}
+	return userID, deviceID
+}
+
+func (s *Server) ensureDebugPrincipal() error {
+	userID, deviceID := s.debugPrincipal()
+	tz := s.cfg.DebugUserTZ
+	if tz == "" {
+		tz = config.DefaultDebugUserTZ
+	}
+	locale := s.cfg.DebugLocale
+	if locale == "" {
+		locale = config.DefaultDebugLocale
+	}
+	if err := s.store.UpsertUser(userID, tz, locale); err != nil {
+		return err
+	}
+	return s.store.UpsertDevice(deviceID, userID, hashToken(debugOpenAuthToken))
+}
+
+func (s *Server) withDebugPrincipal(ctx context.Context) context.Context {
+	userID, deviceID := s.debugPrincipal()
+	ctx = context.WithValue(ctx, ctxUserID, userID)
+	return context.WithValue(ctx, ctxDeviceID, deviceID)
+}
+
 func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if s.cfg.DebugOpenAuth {
+			if err := s.ensureDebugPrincipal(); err != nil {
+				writeError(w, http.StatusInternalServerError, "internal", "initialize debug principal failed")
+				return
+			}
+			next(w, r.WithContext(s.withDebugPrincipal(r.Context())))
+			return
+		}
 		auth := r.Header.Get("Authorization")
 		if !strings.HasPrefix(auth, "Bearer ") {
 			writeError(w, http.StatusUnauthorized, "auth_error", "missing bearer token")
@@ -48,6 +97,10 @@ func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 
 func (s *Server) requireAdminAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if s.cfg.DebugOpenAuth {
+			next(w, r)
+			return
+		}
 		if s.cfg.AdminToken == "" {
 			// No token configured: only allow loopback clients (local admin UI).
 			host, _, err := net.SplitHostPort(r.RemoteAddr)
