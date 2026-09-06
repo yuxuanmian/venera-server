@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Venera Catalog</title>
+  <link rel="stylesheet" href="/admin/style.css">
+</head>
+<body>
+  <main>
+    <h1>Venera 漫画源配置</h1>
+    <p id="error" role="alert"></p>
+    <section>
+      <h2>配置来源</h2>
+      <dl id="configured"></dl>
+    </section>
+    <section>
+      <h2>当前发布</h2>
+      <div id="active">未激活</div>
+    </section>
+    <section>
+      <h2>检查候选</h2>
+      <div id="candidate">暂无候选</div>
+      <button id="check">检查配置</button>
+      <button id="activate" disabled>激活候选</button>
+    </section>
+    <section>
+      <h2>历史版本</h2>
+      <ul id="history"></ul>
+    </section>
+  </main>
+  <script src="/admin/app.js"></script>
+</body>
+</html>

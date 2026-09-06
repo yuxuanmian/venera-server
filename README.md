@@ -1,87 +1,48 @@
-# Venera Scan Server
+# Venera Catalog Authority Server
 
-> ⚠️ **自用项目 / Personal Project**
->
-> 本项目主要为自己使用和实验而开发，不保证对外可用性、稳定性或兼容性；请勿直接用于生产环境或多人公开部署。
-
-## 这是什么
-
-Venera 追更扫描的服务端实现：负责调度、执行漫画源脚本、存储扫描结果，并提供简单管理后台。
-
-## 快速开始
-
-```bash
-go run ./cmd/server
-```
-
-默认监听 `:8080`，数据目录为 `data/`。
-
-### 本地调试：临时关闭 HTTP 鉴权
-
-如需调试 Cloud Tracking，可复制 [`config.example.json`](config.example.json) 为
-`config.json`，并保持 `debug_open_auth` 为 `true`。示例文件已经包含本地
-`venera-configs` checkout 和当前 revision：
-
-```bash
-copy config.example.json config.json       # Windows
-cp config.example.json config.json         # Linux/macOS
-go run ./cmd/server
-```
-
-该开关启用后，所有 `/api` 和 `/admin` 鉴权都会被跳过；请求使用配置中的固定调试用户/设备，
-因此客户端不需要 Access Token，`POST /api/register` 也可以不带 Bearer Token。请求参数校验、
-Cloud Tracking 的 catalog/revision/runtime 校验仍然保留。它只适合本机或隔离网络调试，绝不要把
-开启此开关的服务暴露到公网。环境变量 `VENERA_CONFIG_FILE` 可指定配置文件路径，且
-所有 `VENERA_TRACKING_*` 与 `VENERA_DEBUG_*` 环境变量都优先于 JSON 配置。删除 `config.json` 或将开关改为
-`false` 后重启服务即可恢复鉴权。
-
-## 文档
-
-- 完整说明与操作手册：见 [`doc/venera-server-readme.md`](../doc/venera-server-readme.md)
-- 设计上下文：见 [`doc/scan-server-context.md`](../doc/scan-server-context.md)
-- 接口协议：见 [`doc/scan-server-protocol.md`](../doc/scan-server-protocol.md)
-- 已知缺陷待修：见 [`doc/server-defects-todo.md`](../doc/server-defects-todo.md)
-
-## 测试
-
-```bash
-go test ./...
-```
-
-## Cloud Tracking v1
-
-Cloud Tracking 是独立的 `/api/tracking/` API 和只读 Admin 诊断接口。Server 只激活并发布
-可信目录的 `catalogId`、完整 `activeRevision`、generation 和精确 `(sourceKey, fileName)`
-能力；不向客户端发布脚本或 scanner 下载地址。观测带 revision、artifact、freshness 和
-`favoriteUpdate`，旧 generation 或过期结果不会进入当前快照。
-
-启用目录可以直接在 `config.json` 中配置完整的本地 checkout 与 revision：
+这是一个仅负责漫画源 Catalog 发布的本机/隔离网络 Go 服务。配置唯一来源是静态
+`config.json`（或 `VENERA_CONFIG_FILE` 指定的文件）：
 
 ```json
 {
-  "tracking_catalog_id": "yuxuanmian/venera-configs",
-  "tracking_catalog_repository": "../venera-configs",
-  "tracking_revision": "<full lowercase commit SHA>",
-  "tracking_cache_dir": "data/tracking-cache",
-  "tracking_interval": "12h",
-  "tracking_snapshot_max_requests": 64,
-  "tracking_snapshot_max_items": 0,
-  "tracking_snapshot_deadline": "2m",
-  "tracking_max_attempts": 3,
-  "tracking_observation_limit": 10000,
-  "tracking_index_max_bytes": 4194304
+  "addr": "127.0.0.1:8080",
+  "data_dir": "data",
+  "catalog_url": "https://raw.githubusercontent.com/yuxuanmian/venera-configs/yxm/index.json"
 }
 ```
 
-其中 `tracking_catalog_repository` 和 `tracking_cache_dir` 的相对路径以配置文件所在目录为基准。
-也可以继续使用同名的 `VENERA_TRACKING_*` 环境变量覆盖单项配置。
+`VENERA_ADDR`、`VENERA_DATA_DIR`、`VENERA_CATALOG_URL` 等非空环境变量优先于文件字段；
+相对 `data_dir` 按配置文件目录解析。`catalog_url` 必须是固定
+`raw.githubusercontent.com/<owner>/<repo>/<ref>/index.json`，ref 会在 Check 时解析为
+完整 SHA。服务不需要 GitHub token，也不支持 Web 配置编辑或自动发布。
 
-持久化采用 additive SQLite 表 `tracking_client_state`、`tracking_interests`、
-`tracking_observations` 和 catalog 状态表；用户身份、Cookie、comic ID、marker 与 metadata
-不会出现在 Admin 诊断响应中。`GET /admin/api/tracking/diagnostics` 仅接受管理员认证，
-返回 active revision、客户端/interest、demand/job/checkpoint、freshness、排除原因和旧
-generation 拒绝计数。
+## 发布流程
 
-Server worker 复用了既有 QuickJS/网络边界的必要能力，但 Cloud scanner 只通过
-`internal/tracking/worker` 的精确 artifact identity、来源白名单、请求/响应预算、隔离
-Cookie jar 和 IPC 帧校验运行。旧 V2 prototype 仅作为只读参考，不参与启动路径或覆盖层。
+```powershell
+go run ./cmd/server
+```
+
+打开 `http://127.0.0.1:8080/admin/`，先点击“检查配置”，确认候选后点击“激活候选”。
+Check 只下载、校验并缓存完整 index；Activate 才更新 `data/catalog/state.json` 中的
+active/history。重启只恢复本地状态，不会把远端新内容悄悄发布。历史版本也从管理页通过
+同一个 Activate 接口回滚，回滚不重新访问远端。
+
+接口包括：
+
+- `GET /api/health`
+- `GET /api/catalog/authority`
+- `GET /admin/api/catalog/status`
+- `POST /admin/api/catalog/check`，请求体 `{}`
+- `POST /admin/api/catalog/activate`，请求体 `{"catalogId":"...","revision":"..."}`
+
+新接口没有业务 token，默认监听 localhost；如果要监听局域网，必须由操作者自行隔离网络。
+旧 `/api/tracking/`、扫描、任务、注册及旧 Admin API 已移除并返回 404。旧数据库和用户数据
+不会被服务自动删除或迁移；服务端 Catalog 状态独立保存在 `data/catalog/`。
+
+## 验证
+
+```powershell
+go test ./...
+go vet ./...
+go list -deps ./cmd/server
+```

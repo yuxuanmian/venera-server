@@ -38,6 +38,8 @@ pocdata/*.jsonl
 # Go local env
 go.env
 *.tgz
+vendor/
+.env*
 
 # Optional local server config (may disable all HTTP authentication)
 config.json

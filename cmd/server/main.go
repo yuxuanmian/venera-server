@@ -10,63 +10,37 @@ import (
 	"syscall"
 	"time"
 
+	"venera-server/internal/adminweb"
 	"venera-server/internal/api"
+	"venera-server/internal/catalog"
 	"venera-server/internal/config"
-	"venera-server/internal/debugrecorder"
-	"venera-server/internal/engine"
-	"venera-server/internal/scheduler"
-	"venera-server/internal/store"
 )
 
 func main() {
-	cfg, err := config.Load()
+	cfg, err := config.LoadCatalog()
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
-	if cfg.DebugOpenAuth {
-		log.Printf("WARNING: debug open auth enabled; /api and /admin authentication is disabled")
-	}
 
-	st, err := store.Open(cfg.DataDir)
+	store := catalog.NewStore(cfg.DataDir)
+	manager, err := catalog.NewManager(catalog.CatalogConfig{
+		ConfigFile: cfg.ConfigFile,
+		Addr:       cfg.Addr,
+		DataDir:    cfg.DataDir,
+		CatalogURL: cfg.CatalogURL,
+	}, store, nil)
 	if err != nil {
-		log.Fatalf("open store: %v", err)
+		log.Fatalf("new catalog manager: %v", err)
 	}
-	defer st.Close()
-
-	if n, err := st.ResetRunningJobs(); err != nil {
-		log.Fatalf("reset running jobs: %v", err)
-	} else if n > 0 {
-		log.Printf("recovered %d running job(s) to pending", n)
+	if err := manager.Restore(context.Background()); err != nil {
+		log.Printf("catalog state unavailable; admin remains available: %v", err)
 	}
-
-	rec, err := debugrecorder.New(cfg.DataDir, cfg.DebugRecord)
-	if err != nil {
-		log.Fatalf("open debug recorder: %v", err)
-	}
-	defer rec.Close()
-
-	eng, err := engine.New(cfg, st, rec)
-	if err != nil {
-		log.Fatalf("new engine: %v", err)
-	}
-
-	srv, err := api.NewServer(cfg, st, rec)
-	if err != nil {
-		log.Fatalf("new server: %v", err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	if err := srv.StartTracking(ctx); err != nil {
-		log.Printf("start tracking scanner: %v", err)
-	}
-	sched := scheduler.New(st, eng, 30*time.Second)
-	sched.Configure(cfg.WorkerCount, cfg.RequestInterval, cfg.ChunkCooldown)
-	go sched.Run(ctx)
+	log.Printf("WARNING: catalog admin has no business authentication; keep the listener local or isolated")
+	handler := api.NewCatalogHandler(manager, http.StripPrefix("/admin/", adminweb.NewHandler()))
 
 	httpServer := &http.Server{
 		Addr:    cfg.Addr,
-		Handler: srv,
+		Handler: handler,
 	}
 
 	go func() {
@@ -80,8 +54,6 @@ func main() {
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop
 	log.Printf("shutting down...")
-	cancel()
-	_ = srv.Close()
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 	_ = httpServer.Shutdown(shutdownCtx)
