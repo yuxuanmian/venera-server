@@ -1,0 +1,203 @@
+# 构建并推送多架构镜像到 Docker Hub：yuxuanmian/venera-server
+#
+# 触发与标签策略：
+#   - push 到 master   -> edge + sha-<7位>
+#   - push v* 标签     -> <version> / <major>.<minor> / latest + sha-<7位>
+#                         （metadata-action 的 latest=auto：semver 且非 prerelease 才出 latest，
+#                           例如 v1.0.0-rc.1 只出 1.0.0-rc.1 和 sha-xxx，不会污染 latest）
+#   - 手动 workflow_dispatch：按当前 ref 走同样的规则（master 上手动跑就是 edge）
+#
+# 需要配置的仓库 secret（Settings → Secrets and variables → Actions）：
+#   DOCKERHUB_TOKEN  Docker Hub → Account settings → Personal access tokens，
+#                    权限选 Read & Write（不要用账号密码，密码方式已不可用）
+#   用户名不是 secret，见下面 env；换命名空间时改 env 两处即可。
+#
+# 关于多架构：Dockerfile 用 FROM --platform=$BUILDPLATFORM + GOOS=$TARGETOS/GOARCH=$TARGETARCH
+# 交叉编译，编译阶段固定跑在 runner 上，最终 FROM scratch 没有任何 RUN，
+# 因此 arm64 不需要 QEMU 模拟——所以本 workflow 刻意不装 docker/setup-qemu-action。
+#
+# 本 workflow 不跑 pull_request，所以 push 恒为 true。
+# 将来若加 PR 触发，需要把 push 改成 ${{ github.event_name != 'pull_request' }}。
+
+name: docker-publish
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOCKERHUB_USERNAME: yuxuanmian
+  IMAGE_NAME: yuxuanmian/venera-server
+
+# 发布串行化：不用 cancel-in-progress，避免把正在 push 的 latest/edge 取消成半成品。
+concurrency:
+  group: docker-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: 门禁 + 容器实测
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod # 与 Dockerfile 的 golang:1.26 保持一致
+
+      - name: go vet / go test
+        run: |
+          go vet ./...
+          go test ./...
+
+      - uses: docker/setup-buildx-action@v3
+
+      # 先出单架构镜像并 load 到本地，用真实容器验证；通过后才轮到 publish 推多架构。
+      # 与 publish 共用同一个 gha 缓存 scope（publish 依赖本 job，不会并发写缓存）。
+      - name: 构建 linux/amd64 镜像（本地加载，不推送）
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: venera-server:ci
+          provenance: false # load 到本地镜像库时不支持 attestation
+          sbom: false
+          pull: true
+          cache-from: type=gha,scope=venera-server
+          cache-to: type=gha,scope=venera-server,mode=max
+
+      # 完全复刻 compose.yml 的运行形态：只读根文件系统、去掉全部 capability、
+      # 以镜像内 UID 65532 运行、状态写命名卷 /data。
+      - name: 按 compose.yml 的形态启动容器
+        run: |
+          docker run -d --name venera-smoke \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            -p 18080:8080 \
+            -e VENERA_ADDR=0.0.0.0:8080 \
+            -e VENERA_DATA_DIR=/data \
+            -e VENERA_CATALOG_URL=https://raw.githubusercontent.com/yuxuanmian/venera-configs/yxm/index.json \
+            -v venera-smoke-data:/data \
+            venera-server:ci
+
+      - name: 等待 /api/health 通过
+        run: |
+          set -euo pipefail
+          ok=0
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18080/api/health; then ok=1; break; fi
+            sleep 1
+          done
+          if [ "$ok" != 1 ]; then
+            echo "::error::容器 30s 内未通过 /api/health"
+            docker logs venera-smoke 2>&1 || true
+            exit 1
+          fi
+          docker logs venera-smoke 2>&1 | tee /tmp/smoke.log
+          grep -q 'listening on 0.0.0.0:8080' /tmp/smoke.log
+          echo "::notice::只读根文件系统下监听与健康检查正常"
+
+      # 这条是 compose 部署能否成功的关键：首次创建的命名卷必须继承镜像 /data 的属主，
+      # 否则容器内 UID 65532 无法 MkdirAll /data/catalog，Check/Activate 会报 catalog_storage_failed。
+      # 失败时不要改这里——按报错提示删卷重建，或修正 Dockerfile 的预创建目录属主。
+      - name: 校验命名卷继承了镜像 /data 的属主（65532:65532）
+        run: |
+          set -euo pipefail
+          mountpoint=$(docker volume inspect -f '{{ .Mountpoint }}' venera-smoke-data)
+          owner=$(sudo stat -c '%u:%g' "$mountpoint")
+          echo "命名卷根目录属主: $owner"
+          if [ "$owner" != "65532:65532" ]; then
+            echo "::error::卷属主是 $owner，期望 65532:65532；容器内 UID 65532 将无法写入 /data（请 docker compose down -v 重建卷，或修正镜像）"
+            exit 1
+          fi
+
+      # 端到端写盘 + 出网探测：POST /check 会真实访问 GitHub 并把快照写进 /data，
+      # 顺便验证 scratch 镜像里拷进去的 CA 证书可用（HTTPS 到 raw.githubusercontent.com / api.github.com）。
+      # 依赖外网，抖动不应阻断发布，所以 continue-on-error；真正的阻断条件是上面的属主断言。
+      - name: 端到端写盘探测（联网，失败只告警）
+        continue-on-error: true
+        run: |
+          code=$(curl -sS -o /tmp/check.json -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' -d '{}' \
+            http://127.0.0.1:18080/admin/api/catalog/check || echo 000)
+          echo "POST /admin/api/catalog/check -> HTTP $code"
+          cat /tmp/check.json || true
+          mountpoint=$(docker volume inspect -f '{{ .Mountpoint }}' venera-smoke-data)
+          echo "卷内实际写入内容:"
+          sudo find "$mountpoint" -maxdepth 4 | head -20
+
+      - name: 清理
+        if: always()
+        run: |
+          docker rm -f venera-smoke || true
+          docker volume rm venera-smoke-data || true
+
+  publish:
+    name: 推送 Docker Hub
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # metadata-action 需要完整 tag 历史来判定 semver / latest
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          # 注意：v* 但非 semver 的标签（例如 vNext）在这里产生不了任何 tag，
+          # 构建会在「tag is needed」处明确失败——这是有意的，避免推出无法追溯的镜像。
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=edge,branch=master
+            type=sha,format=short
+          labels: |
+            org.opencontainers.image.title=Venera Catalog Authority Server
+            org.opencontainers.image.description=漫画源 Catalog 发布服务（无业务鉴权，默认仅绑定 127.0.0.1，请勿直接暴露公网）
+
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: true # 出 SLSA provenance（默认 mode=min）
+          sbom: true # 出 SBOM attestation，Docker Hub 页面可见
+          pull: true # 每次都拉最新基础镜像，及时吃到 golang:1.26-alpine 的安全更新
+          cache-from: type=gha,scope=venera-server
+          cache-to: type=gha,scope=venera-server,mode=max
+
+      - name: 汇总
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          {
+            echo "### 已推送 \`$IMAGE_NAME\`"
+            echo
+            echo "- digest: \`$DIGEST\`"
+            echo "- tags:"
+            printf '%s\n' "$TAGS" | sed 's/^/  - `/; s/$/`/'
+            echo
+            echo "拉取：\`docker pull $IMAGE_NAME@$DIGEST\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          docker buildx imagetools inspect "$IMAGE_NAME@$DIGEST"
