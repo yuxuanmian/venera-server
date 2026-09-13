@@ -1,0 +1,36 @@
+# Standalone alternative: docker compose -f compose.config.yml up -d --build
+services:
+  venera-server:
+    image: venera-server:local
+    build:
+      context: .
+    restart: unless-stopped
+    ports:
+      - "${VENERA_BIND_IP:-127.0.0.1}:${VENERA_PORT:-8080}:8080"
+    environment:
+      VENERA_CONFIG_FILE: /app/config.json
+      # Container paths/listener override the local-development values in JSON.
+      VENERA_ADDR: "0.0.0.0:8080"
+      VENERA_DATA_DIR: /data
+    volumes:
+      - catalog-data:/data
+      - type: bind
+        source: ${VENERA_CONFIG_PATH:-./config.example.json}
+        target: /app/config.json
+        read_only: true
+        bind:
+          create_host_path: false
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  catalog-data:

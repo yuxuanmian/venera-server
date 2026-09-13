@@ -1,0 +1,28 @@
+services:
+  venera-server:
+    image: venera-server:local
+    build:
+      context: .
+    restart: unless-stopped
+    ports:
+      - "${VENERA_BIND_IP:-127.0.0.1}:${VENERA_PORT:-8080}:8080"
+    environment:
+      VENERA_ADDR: "0.0.0.0:8080"
+      VENERA_DATA_DIR: /data
+      VENERA_CATALOG_URL: "${VENERA_CATALOG_URL:-https://raw.githubusercontent.com/yuxuanmian/venera-configs/yxm/index.json}"
+    volumes:
+      - catalog-data:/data
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  catalog-data:

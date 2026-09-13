@@ -1,0 +1,10 @@
+# Only compile inputs enter the context: never local config, .env, data or binaries.
+**
+!Dockerfile
+!go.mod
+!go.sum
+!cmd/
+!cmd/server/
+!cmd/server/**
+!internal/
+!internal/**
